@@ -1,4 +1,4 @@
-# Predicting Large Wildfires in the United States
+# Improving Tropical Cyclone Track Forecast
 
 ## Overview
 Over the period from 2008 to 2022, the United States experienced a range of tropical cyclones, including hurricanes and tropical storms. The ability to predict the track of tropical cyclones is important for public safety and disaster preparedness, reducing the risk to human life and property. The Global Ensemble Forecast System (GEFS) is a sophisticated physics model created by the National Oceanic and Atmospheric Administration (NOAA) to make weather predictions spanning from days to weeks into the future. However, the GEFS Mean can have relatively large biases that can lead to large predicted track error. In order to correct the GEFS Mean 5-day forecasts for tropical cyclones in the Atlantic Basin, this research will develop a CNN model developed by taking into account data from 2,395 tropical cyclone 5-day forecast sequences across the United States in a 15 year timespan. 
