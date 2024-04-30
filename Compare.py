@@ -124,6 +124,239 @@ def plot_compare(a, extent, position):
     # Show the plot
     plt.show()
 
+from geopy.distance import geodesic
+from haversine import haversine, Unit
+import math
+import pandas as pd
+import matplotlib.pyplot as plt
+
+from geopy.distance import geodesic
+from haversine import haversine, Unit
+import math
+
+def calculate_angle(lat1, lon1, lat2, lon2, lat3, lon3):
+    # Calculate the distances between the points
+    d1 = haversine((lat1, lon1), (lat2, lon2), unit=Unit.KILOMETERS)
+    d2 = haversine((lat2, lon2), (lat3, lon3), unit=Unit.KILOMETERS)
+    d3 = haversine((lat1, lon1), (lat3, lon3), unit=Unit.KILOMETERS)
+    
+    # Check if any distance is zero
+    if d1 == 0 or d2 == 0 or d3 == 0:
+        return 0
+
+    # Determine the orientation of the points using cross product
+    cross_product = (lon2 - lon1) * (lat3 - lat1) - (lat2 - lat1) * (lon3 - lon1)
+        
+    # Calculate the angle between the lines using the Law of Cosines
+    try:
+        angle = math.acos((d1 ** 2 + d2 ** 2 - d3 ** 2) / (2 * d1 * d2))
+    except ValueError:
+        return 0
+    
+    # Adjust the sign of the angle based on the orientation of the points
+    if cross_product > 0:
+        angle = 2 * math.pi - angle
+        
+    angle_deg = math.degrees(angle)
+
+    return angle_deg
+
+def calculate_ate(lat1, lon1, lat2, lon2, lat3, lon3):
+    angle = calculate_angle(lat1, lon1, lat2, lon2, lat3, lon3)
+    return (haversine((lat1, lon1), (lat2, lon2), unit=Unit.KILOMETERS) * 
+            math.cos(math.radians(angle)))
+
+def calculate_cte(lat1, lon1, lat2, lon2, lat3, lon3):
+    angle = calculate_angle(lat1, lon1, lat2, lon2, lat3, lon3)
+    return (haversine((lat1, lon1), (lat2, lon2), unit=Unit.KILOMETERS) * 
+            math.sin(math.radians(angle)))
+
+def calculate_tte(lat1, lon1, lat2, lon2, lat3, lon3):
+    return (haversine((lat1, lon1), (lat2, lon2), unit=Unit.KILOMETERS))
+
+def create_best_dataframe(year, df_best1, x):
+    a = df_best1.loc[df_best1.index.get_level_values('date').year == year]
+    df_best1 = a
+    df_best2 = df_best1.shift(-1)
+    df = pd.merge(df_best1, df_best2, left_index=True, right_index=True)
+    x = pd.concat([x, df])
+    return x
+
+def create_best_matrix(df_best1):
+    x = pd.DataFrame()
+    for year in df_best1.index.get_level_values('date').year.unique():
+        x = create_best_dataframe(year, df_best1, x)
+    selected_columns = [col for col in x.columns if 'lat' in col or 'lon' in col or 'CY_x' in col]
+
+    df_selected = x[selected_columns].dropna()
+    
+    # Create the new row
+    new_index = df_selected.index[-1][0] + timedelta(hours=6), df_selected.index[-1][1]
+    new_row_data = df_selected.loc[:, ['blat_y', 'blon_y', 'blat_x', 'blon_x']].iloc[-1, :]
+
+    # Create a new DataFrame for the new row
+    new_row_df = pd.DataFrame([new_row_data.values], columns=['blat_x', 'blon_x', 'blat_y', 'blon_y'], index=[new_index])
+
+    # Append the new row to the DataFrame 'a'
+    df_selected = df_selected.append(new_row_df)
+
+    return df_selected
+
+def calculate_error(b):
+    x = create_best_matrix(b.loc[:, ['blat', 'blon']])
+    
+    # Merge the two DataFrames based on the new index column
+    merged_df = pd.merge(b, x, right_on=x.index, left_on=b.index, how='inner')
+
+    merged_df['key_0'] = [str(value) for value in merged_df['key_0']]
+
+    # Splitting the 'coordinates' column into two separate columns
+    merged_df[['date', 'CY']] = merged_df['key_0'].str.strip('()').str.split(',', expand=True)
+
+    # Dropping the original 'coordinates' column
+    merged_df = merged_df.drop('key_0', axis=1)
+
+    # Setting 'x' and 'y' columns as index columns
+    merged_df.set_index(['date', 'CY'], inplace=True)
+    
+    # Apply calculate_ate function element-wise to create ATE column
+    merged_df.loc[:, 'mod_ATE'] = merged_df.apply(lambda row: calculate_ate(row['plat'], row['plon'], row['blat_x'], row['blon_x'], row['blat_y'], row['blon_y']), axis=1)
+    
+    # Apply calculate_ate function element-wise to create ATE column
+    merged_df.loc[:, 'ens_ATE'] = merged_df.apply(lambda row: calculate_ate(row['mlat'], row['mlon'], row['blat_x'], row['blon_x'], row['blat_y'], row['blon_y']), axis=1)
+
+    # Apply calculate_cte function element-wise to create CTE column
+    merged_df.loc[:, 'mod_CTE'] = merged_df.apply(lambda row: calculate_cte(row['plat'], row['plon'], row['blat_x'], row['blon_x'], row['blat_y'], row['blon_y']), axis=1)
+
+    # Apply calculate_cte function element-wise to create CTE column
+    merged_df.loc[:, 'ens_CTE'] = merged_df.apply(lambda row: calculate_cte(row['mlat'], row['mlon'], row['blat_x'], row['blon_x'], row['blat_y'], row['blon_y']), axis=1)
+    
+    # Apply calculate_tte function element-wise to create TTE column
+    merged_df.loc[:, 'mod_TTE'] = merged_df.apply(lambda row: calculate_tte(row['plat'], row['plon'], row['blat_x'], row['blon_x'], row['blat_y'], row['blon_y']), axis=1)
+
+    # Apply calculate_tte function element-wise to create TTE column
+    merged_df.loc[:, 'ens_TTE'] = merged_df.apply(lambda row: calculate_tte(row['mlat'], row['mlon'], row['blat_x'], row['blon_x'], row['blat_y'], row['blon_y']), axis=1)
+    
+    last_row = merged_df.iloc[-1]  # Get the last row
+    last_row[-6:-2] *= -1   
+    merged_df.iloc[-1] = last_row
+    
+    
+    # Calculate the correlation between the two columns
+    print("Correlation between mod_ATE and mod_TTE:", merged_df['mod_ATE'].corr(merged_df['mod_TTE']))
+    print("Correlation between mod_CTE and mod_TTE:", merged_df['mod_CTE'].corr(merged_df['mod_TTE']))
+    print("Correlation between ens_ATE and ens_TTE:", merged_df['ens_ATE'].corr(merged_df['ens_TTE']))
+    print("Correlation between ens_CTE and ens_TTE:", merged_df['ens_CTE'].corr(merged_df['ens_TTE']))
+    
+    return merged_df
+
+def tte_graph(b, fig_size=(8, 6)):    
+    x_values = [6*i for i in range(len(b))]
+    
+    plt.figure(figsize=fig_size)
+
+    # Plotting
+    plt.plot(x_values, b['ens_TTE'], label='GEFS Mean Error', color='r')  # Red line
+    plt.plot(x_values, b['mod_TTE'], label='CNN Model Error', color='b')  # Blue line
+
+    # Adding labels and title
+    plt.xlabel('Forecast lead time (hours)')
+    plt.ylabel('Total Track Error (km)')
+
+    # Adding legend
+    plt.legend()
+
+    # Display the plot
+    plt.show()
+
+def ate_graph(b, fig_size=(8, 6)):
+    x_values = [6*i for i in range(len(b))]
+    
+    plt.figure(figsize=fig_size)
+    
+    b['ens_ATE'] = b['ens_ATE'].abs()
+    b['mod_ATE'] = b['mod_ATE'].abs()
+
+    # Plotting
+    plt.plot(x_values, b['ens_ATE'], label='GEFS Mean Error', color='r')  # Red line
+    plt.plot(x_values, b['mod_ATE'], label='CNN Model Error', color='b')  # Blue line
+
+    # Adding labels and title
+    plt.xlabel('Forecast lead time (hours)')
+    plt.ylabel('Along Track Error (km)')
+
+    # Adding legend
+    plt.legend()
+
+    # Display the plot
+    plt.show()
+    
+def cte_graph(b, fig_size=(8, 6)):
+    x_values = [6*i for i in range(len(b))]
+    
+    b['ens_CTE'] = b['ens_CTE'].abs()
+    b['mod_CTE'] = b['mod_CTE'].abs()
+    
+    plt.figure(figsize=fig_size)
+
+    # Plotting
+    plt.plot(x_values, b['ens_CTE'], label='GEFS Mean Error', color='r')  # Red line
+    plt.plot(x_values, b['mod_CTE'], label='CNN Model Error', color='b')  # Blue line
+
+    # Adding labels and title
+    plt.xlabel('Forecast lead time (hours)')
+    plt.ylabel('Cross Track Error (km)')
+
+    # Adding legend
+    plt.legend()
+
+    # Display the plot
+    plt.show()
+    
+def all_on_same(b, fig_size=(8, 6)):
+    b['ens_ATE'] = b['ens_ATE'].abs()
+    b['mod_ATE'] = b['mod_ATE'].abs()
+    
+    b['ens_CTE'] = b['ens_CTE'].abs()
+    b['mod_CTE'] = b['mod_CTE'].abs()
+
+    x_values = [6*i for i in range(len(b))]
+    
+    plt.figure(figsize=fig_size)
+
+    # Plotting TTE
+    plt.plot(x_values, b['ens_TTE'], label='GEFS Mean TTE', color='r', linestyle='-')  # Red solid line
+    plt.plot(x_values, b['mod_TTE'], label='CNN Model TTE', color='b', linestyle='-')  # Blue solid line
+
+    # Plotting ATE
+    plt.plot(x_values, b['ens_ATE'], label='GEFS Mean ATE', color='magenta', linestyle=':')  # Red dashed line
+    plt.plot(x_values, b['mod_ATE'], label='CNN Model ATE', color='teal', linestyle=':')  # Blue dashed line
+
+    # Plotting CTE
+    plt.plot(x_values, b['ens_CTE'], label='GEFS Mean CTE', color='crimson', linestyle='--')  # Red dash-dot line
+    plt.plot(x_values, b['mod_CTE'], label='CNN Model CTE', color='darkblue', linestyle='--')  # Blue dash-dot line
+
+    # Adding labels and title
+    plt.xlabel('Forecast lead time (hours)')
+    plt.ylabel('Error (km)')
+
+    # Adding legend
+    plt.legend()
+
+    # Display the plot
+    plt.show()
+    
+def error_graph(b, fig_size=(8, 6)):
+    b = calculate_error(b)
+    '''
+    all_on_same(b, fig_size)
+    '''
+    tte_graph(b, fig_size)
+    ate_graph(b, fig_size)
+    cte_graph(b, fig_size)
+    
+    
+    
 # Function to calculate the total absolute differences between DataFrames and return the closest overall
 def compare_closeness(start_num, test, outputs, NUM_OF_INTERVALS, _print = False):
     
